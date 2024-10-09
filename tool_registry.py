@@ -14,7 +14,7 @@ from openai.types.chat import (ChatCompletionMessageParam,
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel
 
-from documentintelligence.chat_client import Client
+from openai_functionregistry.chat_client import Client
 
 T = TypeVar("T", bound=BaseModel)
 
