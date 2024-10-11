@@ -4,6 +4,7 @@ Defines a `ParserRegistry` and a `FunctionRegistry` to make it convenient
 
 import inspect
 import logging
+from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Sequence, Type, TypeVar
 
@@ -15,6 +16,13 @@ from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel
 
 from openai_functionregistry.chat_client import Client
+
+
+@dataclass
+class FunctionCall:
+    arguments: Type[BaseModel]
+    result: Any
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -227,8 +235,10 @@ class FunctionRegistry(BaseRegistry):
         messages: Sequence[ChatCompletionMessageParam],
         function_subset=None,
         target_function: None | str = None,
+        max_retries: int = 5,
         is_mini: bool = True,
-    ) -> tuple[ChatCompletion, list[Any]]:
+        retry_temperature=0.1,
+    ) -> tuple[ChatCompletion, list[FunctionCall]]:
         """Call multiple functions using the LLM"""
         if target_function:
             function_subset = [target_function]
@@ -257,13 +267,15 @@ class FunctionRegistry(BaseRegistry):
             parse_fn=parse_response,
             is_mini=is_mini,
             tool_choice=tool_choice,
+            max_retries=max_retries,
+            retry_temperature=retry_temperature,
         )
 
         results = []
         for parsed_args in parsed_args_list:
             function = self.paramdef_to_function[type(parsed_args)]
             result = function(**parsed_args.model_dump())
-            results.append(result)
+            results.append(FunctionCall(arguments=parsed_args, result=result))
 
         return response, results
 
@@ -273,7 +285,7 @@ class FunctionRegistry(BaseRegistry):
         function_subset=None,
         target_function: str | None = None,
         is_mini: bool = True,
-    ) -> tuple[ChatCompletion, Any]:
+    ) -> tuple[ChatCompletion, FunctionCall]:
         """Call a single function using the LLM, raise exception if multiple tool calls are returned"""
         response, results = self.call_functions(
             messages=messages,
