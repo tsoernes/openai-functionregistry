@@ -52,6 +52,10 @@ class NoToolCallsError(LLMError):
     pass
 
 
+# Do not retry on these exceptions as it is pointless.
+exclude_exceptions = (TypeError, openai.BadRequestError)
+
+
 def with_model_fallback(func):
     """Decorator to attempt mini-model first, then fall back to regular model"""
     sig = inspect.signature(func)
@@ -67,6 +71,8 @@ def with_model_fallback(func):
 
         try:
             return func(**bound_dict, is_mini=True)
+        except exclude_exceptions as e:
+            raise e
         except Exception as e:
             if not self.allow_fallback:
                 raise
@@ -135,7 +141,7 @@ class BaseRegistry:
                 )
                 result = parse_fn(response)
                 return response, result
-            except TypeError as e:
+            except exclude_exceptions as e:
                 raise e
             except Exception as e:
                 logging.info(
@@ -349,6 +355,7 @@ class ParserRegistry(BaseRegistry):
         model_subset: None | str | list[str] = None,
         target_model: None | str = None,
         is_mini: bool = True,
+        max_retries: int = 5,
     ) -> tuple[ChatCompletion, list[BaseModel]]:
         """Parse multiple unstructured responses into structured data"""
         if target_model:
@@ -378,6 +385,7 @@ class ParserRegistry(BaseRegistry):
             parse_fn=parse_result,
             is_mini=is_mini,
             tool_choice=tool_choice,
+            max_retries=max_retries,
         )
 
         return (response, parsed_results)
