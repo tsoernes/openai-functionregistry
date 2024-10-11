@@ -1,1 +1,6 @@
+.env
+*.pdf
 /__pycache__/
+/documentintelligence/__pycache__/
+.gitignore
+*.pyc

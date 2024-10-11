@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "openai_functionregistry"
+version = "0.1.0"
+description = "OpenAI Function and Parser Registry"
+authors = ["Torstein Sørnes <t.soernes@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+betterpathlib = "^0.1.0"
+python-dotenv = "^1.0.1"
+openai = "^1.50.2"
+pydantic = "^2.9.2"
+tiktoken = "^0.7.0"
+
+[tool.poetry.group.dev.dependencies]
+ipython = "^8.27.0"
+stackprinter = "^0.2.12"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
