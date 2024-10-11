@@ -20,6 +20,7 @@ from openai_functionregistry.chat_client import Client
 
 @dataclass
 class FunctionCall:
+    "Function call arguments and the result of the function call."
     arguments: Type[BaseModel]
     result: Any
 
