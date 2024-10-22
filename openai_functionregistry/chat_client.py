@@ -46,8 +46,9 @@ class Client:
             api_version=self.api_version,
         )
 
-    def calculate_cost(self, input_tokens: str | int = 0, output_tokens: str | int = 0) -> LLMCost:
+    def calculate_cost(self, input_tokens: str |  list[str] | int = 0, output_tokens: str | list[str] | int = 0) -> LLMCost:
         """
+        tokens: a text string, a list of text strings, or the number of tokens (int)
         Returns a LLM cost object.
 
         In NOK.
@@ -68,8 +69,22 @@ class Client:
             cost_per_1m_out_nok = 157.7371
 
         encoder = tiktoken.encoding_for_model("gpt-4o")  # same encoding with 4o-mini as with 4o
-        n_input_tokens = input_tokens if isinstance(input_tokens, int) else len(encoder.encode(input_tokens))
-        n_output_tokens = output_tokens if isinstance(output_tokens, int) else len(encoder.encode(output_tokens))
+        if isinstance(input_tokens, int):
+            n_input_tokens = input_tokens
+        elif isinstance(input_tokens, str):
+            n_input_tokens = len(encoder.encode(input_tokens))
+        elif isinstance(input_tokens, list):
+            n_input_tokens = sum(map(len, encoder.encode_batch(input_tokens)))
+        else:
+            raise TypeError(input_tokens)
+        if isinstance(output_tokens, int):
+            n_output_tokens = output_tokens
+        elif isinstance(output_tokens, str):
+            n_output_tokens = len(encoder.encode(output_tokens))
+        elif isinstance(output_tokens, list):
+            n_output_tokens = sum(map(len, encoder.encode_batch(output_tokens)))
+        else:
+            raise TypeError(output_tokens)
 
         mil = 1_000_000
         input_cost = n_input_tokens * cost_per_1m_inp_nok / mil
