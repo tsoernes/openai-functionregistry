@@ -4,9 +4,24 @@ from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI, AzureOpenAI
 import datetime
 import tiktoken
+from dataclasses import dataclass
 
 load_dotenv()
 
+@dataclass
+class LLMCost:
+    n_input_tokens: int = 0
+    input_cost: float = 0
+    n_output_tokens: int = 0
+    output_cost: float = 0
+    currency: str = "NOK"
+
+    @property
+    def total(self) -> float:
+        return self.input_cost + self.output_cost
+
+    def __str__(self) -> str:
+        return f"{self.n_input_tokens:,} input tokens cost {self.input_cost:.4f}, {self.n_output_tokens:,} output tokens cost {self.output_cost:.4f}; total {self.total:.4f} {self.currency}"
 
 class Client:
     """Configuration for OpenAI model endpoints"""
@@ -31,9 +46,11 @@ class Client:
             api_version=self.api_version,
         )
 
-    def calculate_cost(self, input_tokens: str | int = 0, output_tokens: str | int = 0) -> float:
+    def calculate_cost(self, input_tokens: str | int = 0, output_tokens: str | int = 0) -> LLMCost:
         """
-        In NOK
+        Returns a LLM cost object.
+
+        In NOK.
 
         https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
         """
@@ -51,10 +68,10 @@ class Client:
             cost_per_1m_out_nok = 157.7371
 
         encoder = tiktoken.encoding_for_model("gpt-4o")  # same encoding with 4o-mini as with 4o
-        n_inp_tokens = input_tokens if isinstance(input_tokens, int) else len(encoder.encode(input_tokens))
-        n_out_tokens = output_tokens if isinstance(output_tokens, int) else len(encoder.encode(output_tokens))
+        n_input_tokens = input_tokens if isinstance(input_tokens, int) else len(encoder.encode(input_tokens))
+        n_output_tokens = output_tokens if isinstance(output_tokens, int) else len(encoder.encode(output_tokens))
 
         mil = 1_000_000
-        input_cost = n_inp_tokens * cost_per_1m_inp_nok / mil
-        output_cost = n_out_tokens * cost_per_1m_out_nok / mil
-        return input_cost + output_cost
+        input_cost = n_input_tokens * cost_per_1m_inp_nok / mil
+        output_cost = n_output_tokens * cost_per_1m_out_nok / mil
+        return LLMCost(n_input_tokens=n_input_tokens, input_cost=input_cost, n_output_tokens=n_output_tokens, output_cost=output_cost, currency="NOK")
