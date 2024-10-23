@@ -67,6 +67,31 @@ class LLMCost:
             )
         return NotImplemented
 
+    def __eq__(self, other):
+        if isinstance(other, LLMCost):
+            return self.total == other.total
+        return NotImplemented
+
+    def __lt__(self, other):
+        if isinstance(other, LLMCost):
+            return self.total < other.total
+        return NotImplemented
+
+    def __le__(self, other):
+        if isinstance(other, LLMCost):
+            return self.total <= other.total
+        return NotImplemented
+
+    def __gt__(self, other):
+        if isinstance(other, LLMCost):
+            return self.total > other.total
+        return NotImplemented
+
+    def __ge__(self, other):
+        if isinstance(other, LLMCost):
+            return self.total >= other.total
+        return NotImplemented
+
 class Client:
     """Configuration for OpenAI model endpoints"""
 
