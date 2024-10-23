@@ -23,6 +23,50 @@ class LLMCost:
     def __str__(self) -> str:
         return f"{self.n_input_tokens:,} input tokens cost {self.input_cost:.4f}, {self.n_output_tokens:,} output tokens cost {self.output_cost:.4f}; total {self.total:.4f} {self.currency}"
 
+    def __add__(self, other):
+        if isinstance(other, LLMCost):
+            return LLMCost(
+                n_input_tokens=self.n_input_tokens + other.n_input_tokens,
+                input_cost=self.input_cost + other.input_cost,
+                n_output_tokens=self.n_output_tokens + other.n_output_tokens,
+                output_cost=self.output_cost + other.output_cost,
+                currency=self.currency
+            )
+        return NotImplemented
+
+    def __sub__(self, other):
+        if isinstance(other, LLMCost):
+            return LLMCost(
+                n_input_tokens=self.n_input_tokens - other.n_input_tokens,
+                input_cost=self.input_cost - other.input_cost,
+                n_output_tokens=self.n_output_tokens - other.n_output_tokens,
+                output_cost=self.output_cost - other.output_cost,
+                currency=self.currency
+            )
+        return NotImplemented
+
+    def __mul__(self, factor):
+        if isinstance(factor, (int, float)):
+            return LLMCost(
+                n_input_tokens=int(self.n_input_tokens * factor),
+                input_cost=self.input_cost * factor,
+                n_output_tokens=int(self.n_output_tokens * factor),
+                output_cost=self.output_cost * factor,
+                currency=self.currency
+            )
+        return NotImplemented
+
+    def __truediv__(self, factor):
+        if isinstance(factor, (int, float)):
+            return LLMCost(
+                n_input_tokens=int(self.n_input_tokens / factor),
+                input_cost=self.input_cost / factor,
+                n_output_tokens=int(self.n_output_tokens / factor),
+                output_cost=self.output_cost / factor,
+                currency=self.currency
+            )
+        return NotImplemented
+
 class Client:
     """Configuration for OpenAI model endpoints"""
 
