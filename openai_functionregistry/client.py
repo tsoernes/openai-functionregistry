@@ -1,6 +1,7 @@
 import os
 
 from dotenv import load_dotenv
+from typing import Iterable
 from openai import AsyncAzureOpenAI, AzureOpenAI
 import datetime
 import tiktoken
@@ -115,7 +116,7 @@ class Client:
             api_version=self.api_version,
         )
 
-    def calculate_cost(self, input_tokens: str |  list[str] | int = 0, output_tokens: str | list[str] | int = 0) -> LLMCost:
+    def calculate_cost(self, input_tokens: str |  Iterable[str] | int = 0, output_tokens: str | Iterable[str] | int = 0) -> LLMCost:
         """
         tokens: a text string, a list of text strings, or the number of tokens (int)
         Returns a LLM cost object.
@@ -142,8 +143,8 @@ class Client:
             n_input_tokens = input_tokens
         elif isinstance(input_tokens, str):
             n_input_tokens = len(encoder.encode(input_tokens))
-        elif isinstance(input_tokens, list):
-            n_input_tokens = sum(map(len, encoder.encode_batch(input_tokens)))
+        elif isinstance(input_tokens, Iterable):
+            n_input_tokens = sum(map(len, encoder.encode_batch(list(input_tokens))))
         else:
             raise TypeError(input_tokens)
         if isinstance(output_tokens, int):
