@@ -99,7 +99,9 @@ class LLMCost:
 class Client:
     """Configuration for OpenAI model endpoints"""
 
-    def __init__(self, is_mini: bool = True, batch:bool=False, async_:bool=False, api_version: str | None = None):
+    def __init__(self, is_mini: bool = True, batch:bool=False, async_:bool=False, api_version: str | None = None, tokens_per_minute_limit:int=450_000, requests_per_minute_limit:int=4_500):
+        self.tokens_per_minute_limit = tokens_per_minute_limit
+        self.requests_per_minute_limit = requests_per_minute_limit
         if is_mini:
             self.azure_endpoint = os.environ["OAI-GPT4O-mini-18072024-ENDPOINT"]
             self.api_key = os.environ["OAI-GPT4O-mini-18072024-API-KEY"]
