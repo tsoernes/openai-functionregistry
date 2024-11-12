@@ -99,7 +99,7 @@ class LLMCost:
 class Client:
     """Configuration for OpenAI model endpoints"""
 
-    def __init__(self, is_mini: bool = True, batch=False, api_version: str | None = None):
+    def __init__(self, is_mini: bool = True, batch:bool=False, async_:bool=False, api_version: str | None = None):
         if is_mini:
             self.azure_endpoint = os.environ["OAI-GPT4O-mini-18072024-ENDPOINT"]
             self.api_key = os.environ["OAI-GPT4O-mini-18072024-API-KEY"]
@@ -125,11 +125,18 @@ class Client:
             raise ValueError(f"Could not detect model version {self.model}")
 
         self.is_mini = is_mini
-        self.client = AzureOpenAI(
-            azure_endpoint=self.azure_endpoint,
-            api_key=self.api_key,
-            api_version=self.api_version,
-        )
+        if async_:
+            self.client = AsyncAzureOpenAI(
+                azure_endpoint=self.azure_endpoint,
+                api_key=self.api_key,
+                api_version=self.api_version,
+            )
+        else:
+            self.client = AzureOpenAI(
+                azure_endpoint=self.azure_endpoint,
+                api_key=self.api_key,
+                api_version=self.api_version,
+            )
         self.encoder = tiktoken.encoding_for_model(
             "gpt-4o"
         )  # same encoding with 4o-mini as with 4o

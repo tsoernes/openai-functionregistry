@@ -2,6 +2,7 @@
 Defines a `ParserRegistry` and a `FunctionRegistry` to make it convenient
 """
 
+import asyncio
 from datetime import datetime
 import json
 import time
@@ -16,8 +17,7 @@ from typing import Any, Callable, Sequence, Type, TypeVar
 from betterpathlib import Path
 import openai
 from openai import NOT_GIVEN
-from openai.types.chat import (ChatCompletionMessageParam,
-                               ChatCompletionToolParam)
+from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel
 
@@ -27,6 +27,7 @@ from openai_functionregistry.client import Client
 @dataclass
 class FunctionCall:
     "Function call arguments and the result of the function call."
+
     arguments: Type[BaseModel]
     result: Any
 
@@ -112,13 +113,17 @@ class BaseRegistry:
     """Base registry for LLM function calls and parsing"""
 
     def __init__(
-        self, mini_client: Client, regular_client: Client, allow_fallback: bool = True
+        self, mini_client: Client, regular_client: Client, mini_async_client: Client, regular_async_client: Client, allow_fallback: bool = True
     ):
         self.allow_fallback = allow_fallback
         self.mini_client = mini_client
         self.regular_client = regular_client
+        self.mini_async_client = mini_async_client
+        self.regular_async_client = regular_async_client
 
-    def _get_client(self, is_mini: bool) -> Client:
+    def _get_client(self, is_mini: bool, async_: bool = False) -> Client:
+        if async_:
+            return self.mini_async_client if is_mini else self.regular_async_client
         return self.mini_client if is_mini else self.regular_client
 
     def _retry_chat(
@@ -316,10 +321,8 @@ class FunctionRegistry(BaseRegistry):
 class ParserRegistry(BaseRegistry):
     """Registry for parsing unstructured responses into structured data"""
 
-    def __init__(
-        self, mini_client: Client, regular_client: Client, allow_fallback: bool = True
-    ):
-        super().__init__(mini_client, regular_client, allow_fallback)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.response_models: dict[str, Type[BaseModel]] = {}
 
     def __str__(self) -> str:
@@ -405,7 +408,7 @@ class ParserRegistry(BaseRegistry):
     ) -> tuple[ChatCompletion, BaseModel]:
         """Parse a single unstructured response into structured data, raise exception if multiple tool calls are returned"""
         response, results = self.parse_responses(
-            messages=messages,
+            messages=messages,  # type: ignore
             model_subset=model_subset,
             target_model=target_model,
             is_mini=is_mini,
@@ -425,6 +428,7 @@ class ParserRegistry(BaseRegistry):
         max_retries: int = 5,
         custom_id: str | None = None,
         sleep_time: float = 10,
+        temperature: float = 0,
     ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
         """Parse multiple lists of unstructured responses into structured data using the Azure OpenAI Batch API"""
         if custom_id is None:
@@ -439,7 +443,7 @@ class ParserRegistry(BaseRegistry):
         batch_requests = {}
         for i, messages in enumerate(messages_list):
             custom_id_ = f"{custom_id}-{i}"
-            batch_requests[custom_id_] ={
+            batch_requests[custom_id_] = {
                 "custom_id": custom_id_,
                 "method": "POST",
                 "url": "/chat/completions",
@@ -447,14 +451,15 @@ class ParserRegistry(BaseRegistry):
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": tool_choice,
-                    "model": self.mini_client.model
-                }
+                    "model": self.mini_client.model,
+                    "temperature": temperature,
+                },
             }
 
         batch_file_path = Path.tempdir() / f"{custom_id}.jsonl"
-        with open(batch_file_path, 'w') as f:
+        with open(batch_file_path, "w") as f:
             for request in batch_requests.values():
-                f.write(json.dumps(request) + '\n')
+                f.write(json.dumps(request) + "\n")
 
         if is_mini is True:
             client = self.mini_client.client
@@ -462,23 +467,29 @@ class ParserRegistry(BaseRegistry):
             client = self.regular_client.client
 
         # Upload the batch file
-        batch_file = client.files.create(file=open(batch_file_path, "rb"), purpose="batch")
+        batch_file = client.files.create(
+            file=open(batch_file_path, "rb"), purpose="batch"
+        )
         print("Batch File ID:", batch_file.id)
 
         # Create the batch job
-        batch_job = client.batches.create(input_file_id=batch_file.id, endpoint="/v1/chat/completions", completion_window="24h")
+        batch_job = client.batches.create(
+            input_file_id=batch_file.id,
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
         print("Batch Job ID:", batch_job.id)
 
         # Poll for job completion
         while True:
             batch_job = client.batches.retrieve(batch_job.id)
-            if batch_job.status in ['completed', 'failed']:
+            if batch_job.status in ["completed", "failed"]:
                 break
             time.sleep(sleep_time)
 
         print("Batch Job Status:", batch_job.status)
 
-        if batch_job.status == 'completed':
+        if batch_job.status == "completed":
             output_file = client.files.content(batch_job.output_file_id)  # type: ignore
             results = []
             successful_ids: set[str] = set()
@@ -488,12 +499,18 @@ class ParserRegistry(BaseRegistry):
                 # TODO fallback if fails
                 try:
                     response = json.loads(line)
-                    tool_calls = response['response']['body']['choices'][0]["message"]["tool_calls"]
+                    tool_calls = response["response"]["body"]["choices"][0]["message"][
+                        "tool_calls"
+                    ]
                     parsed_results = []
                     for tool_call in tool_calls:
                         try:
-                            response_model = self.response_models[tool_call["function"]["name"]]
-                            model_inst = response_model.model_validate_json(tool_call["function"]["arguments"])
+                            response_model = self.response_models[
+                                tool_call["function"]["name"]
+                            ]
+                            model_inst = response_model.model_validate_json(
+                                tool_call["function"]["arguments"]
+                            )
                             parsed_results.append(model_inst)
                         except Exception as e:
                             logging.error(f"Failed to parse model: {e}")
@@ -501,7 +518,7 @@ class ParserRegistry(BaseRegistry):
                             logging.error(f"{response_model=}")
                             break
                     else:
-                        results.append((response, parsed_results))
+                        results.append(parsed_results)
                         successful_ids.add(response["custom_id"])
                 except Exception as e:
                     logging.error(f"Failed to decode {line=}\n{e}")
@@ -512,4 +529,129 @@ class ParserRegistry(BaseRegistry):
 
     def _generate_random_string(self, length: int = 3) -> str:
         dt = datetime.now().strftime("%YY-%m-%dT%H:%M")
-        return dt + '_' + ''.join(random.choices(string.ascii_letters + string.digits, k=length))
+        return (
+            dt
+            + "_"
+            + "".join(random.choices(string.ascii_letters + string.digits, k=length))
+        )
+
+    def parse_responses_batch_async(
+        self,
+        messages_list: Sequence[Sequence[ChatCompletionMessageParam]],
+        model_subset: None | str | list[str] = None,
+        target_model: None | str = None,
+        is_mini: bool = True,
+        max_retries: int = 5,
+        init_temperature = 0,
+    ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+        """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
+        async def async_wrapper():
+            # Call the parse_responses_batch_async method
+            results = await self.parse_responses_batch_async_(
+                messages_list=messages_list,
+                model_subset=model_subset,
+                target_model=target_model,
+                is_mini=is_mini,
+                max_retries=max_retries,
+                init_temperature=init_temperature,
+            )
+            return results
+
+        # Run the async function and get the results
+        results = asyncio.run(async_wrapper())
+        return results
+
+async def parse_responses_batch_async_(
+    self,
+    messages_list: Sequence[Sequence[ChatCompletionMessageParam]],
+    model_subset: None | str | list[str] = None,
+    target_model: None | str = None,
+    is_mini: bool = True,
+    max_retries: int = 5,
+    init_temperature=0,
+) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+    """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
+    if target_model:
+        model_subset = [target_model]
+    tools = self.get_tools(is_mini, subset=model_subset)
+    tool_choice = (
+        {"type": "function", "function": {"name": target_model}}
+        if target_model
+        else NOT_GIVEN
+    )
+
+    async def parse_result(response: ChatCompletion) -> list[BaseModel]:
+        tool_calls = response.choices[0].message.tool_calls
+        if not tool_calls:
+            return []
+        parsed_results = []
+        for tool_call in tool_calls:
+            response_model = self.response_models[tool_call.function.name]
+            parsed_results.append(
+                response_model.model_validate_json(tool_call.function.arguments)
+            )
+        return parsed_results
+
+    async def process_single_request(
+        messages: Sequence[ChatCompletionMessageParam],
+    ) -> tuple[ChatCompletion, list[BaseModel]]:
+        exceptions = []
+
+        for retry in range(max_retries):
+            temperature = 0.1 if retry > 0 else init_temperature
+            try:
+                client = self._get_client(is_mini, async_=True)
+                response = await client.client.chat.completions.create(
+                    model=client.model,
+                    messages=messages,
+                    tools=tools,
+                    temperature=temperature,
+                    tool_choice=tool_choice,  # type: ignore
+                )
+                result = await parse_result(response)
+                return response, result
+            except exclude_exceptions as e:
+                raise e
+            except Exception as e:
+                logging.info(
+                    f"Attempt {retry + 1} failed with mini model: {type(e).__name__}: {str(e)}"
+                )
+                exceptions.append(e)
+
+        # Fallback to regular async client if mini model fails
+        if self.allow_fallback:
+            for retry in range(max_retries):
+                temperature = 0.1 if retry > 0 else init_temperature
+                try:
+                    client = self._get_client(is_mini=False, async_=True)
+                    response = await client.client.chat.completions.create(
+                        model=client.model,
+                        messages=messages,
+                        tools=tools,
+                        temperature=temperature,
+                        tool_choice=tool_choice,  # type: ignore
+                    )
+                    result = await parse_result(response)
+                    return response, result
+                except exclude_exceptions as e:
+                    raise e
+                except Exception as e:
+                    logging.info(
+                        f"Attempt {retry + 1} failed with regular model: {type(e).__name__}: {str(e)}"
+                    )
+                    exceptions.append(e)
+
+        raise ExceptionGroup(f"Failed after {max_retries} retries with both models", exceptions)
+
+    tasks = [process_single_request(messages) for messages in messages_list]
+    results_and_errs = await asyncio.gather(*tasks, return_exceptions=True)
+    results = []
+
+    # Handle exceptions if needed
+    for result_or_err in results_and_errs:
+        if isinstance(result_or_err, Exception):
+            logging.error(f"Error processing batch request: {result_or_err}")
+        else:
+            results.append(result_or_err)
+
+    return results
