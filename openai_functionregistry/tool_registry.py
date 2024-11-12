@@ -2,12 +2,18 @@
 Defines a `ParserRegistry` and a `FunctionRegistry` to make it convenient
 """
 
+from datetime import datetime
+import json
+import time
+import random
+import string
 import inspect
 import logging
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, Callable, Sequence, Type, TypeVar
 
+from betterpathlib import Path
 import openai
 from openai import NOT_GIVEN
 from openai.types.chat import (ChatCompletionMessageParam,
@@ -392,7 +398,7 @@ class ParserRegistry(BaseRegistry):
 
     def parse_response(
         self,
-        messages: Sequence[ChatCompletionMessageParam],
+        messages: Sequence[ChatCompletionMessageParam] | list[dict[str, str]],
         model_subset: None | str | list[str] = None,
         target_model: str | None = None,
         is_mini: bool = True,
@@ -409,3 +415,101 @@ class ParserRegistry(BaseRegistry):
         if len(results) > 1:
             raise MultipleToolCallsError(f"{response=}\n{results=}")
         return response, results[0]
+
+    def parse_responses_batch(
+        self,
+        messages_list: Sequence[Sequence[ChatCompletionMessageParam]],
+        model_subset: None | str | list[str] = None,
+        target_model: None | str = None,
+        is_mini: bool = True,
+        max_retries: int = 5,
+        custom_id: str | None = None,
+        sleep_time: float = 10,
+    ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+        """Parse multiple lists of unstructured responses into structured data using the Azure OpenAI Batch API"""
+        if custom_id is None:
+            custom_id = f"{self._generate_random_string()}"
+        tools = self.get_tools(is_mini, subset=model_subset)
+        tool_choice = (
+            {"type": "function", "function": {"name": target_model}}
+            if target_model
+            else NOT_GIVEN
+        )
+        # Create a batch file
+        batch_requests = {}
+        for i, messages in enumerate(messages_list):
+            custom_id_ = f"{custom_id}-{i}"
+            batch_requests[custom_id_] ={
+                "custom_id": custom_id_,
+                "method": "POST",
+                "url": "/chat/completions",
+                "body": {
+                    "messages": messages,
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "model": self.mini_client.model
+                }
+            }
+
+        batch_file_path = Path.tempdir() / f"{custom_id}.jsonl"
+        with open(batch_file_path, 'w') as f:
+            for request in batch_requests.values():
+                f.write(json.dumps(request) + '\n')
+
+        if is_mini is True:
+            client = self.mini_client.client
+        else:
+            client = self.regular_client.client
+
+        # Upload the batch file
+        batch_file = client.files.create(file=open(batch_file_path, "rb"), purpose="batch")
+        print("Batch File ID:", batch_file.id)
+
+        # Create the batch job
+        batch_job = client.batches.create(input_file_id=batch_file.id, endpoint="/v1/chat/completions", completion_window="24h")
+        print("Batch Job ID:", batch_job.id)
+
+        # Poll for job completion
+        while True:
+            batch_job = client.batches.retrieve(batch_job.id)
+            if batch_job.status in ['completed', 'failed']:
+                break
+            time.sleep(sleep_time)
+
+        print("Batch Job Status:", batch_job.status)
+
+        if batch_job.status == 'completed':
+            output_file = client.files.content(batch_job.output_file_id)  # type: ignore
+            results = []
+            successful_ids: set[str] = set()
+
+            # for line in output_file.decode().splitlines():
+            for line in output_file.iter_lines():
+                # TODO fallback if fails
+                try:
+                    response = json.loads(line)
+                    tool_calls = response['response']['body']['choices'][0]["message"]["tool_calls"]
+                    parsed_results = []
+                    for tool_call in tool_calls:
+                        try:
+                            response_model = self.response_models[tool_call["function"]["name"]]
+                            model_inst = response_model.model_validate_json(tool_call["function"]["arguments"])
+                            parsed_results.append(model_inst)
+                        except Exception as e:
+                            logging.error(f"Failed to parse model: {e}")
+                            logging.error(f"{line=}")
+                            logging.error(f"{response_model=}")
+                            break
+                    else:
+                        results.append((response, parsed_results))
+                        successful_ids.add(response["custom_id"])
+                except Exception as e:
+                    logging.error(f"Failed to decode {line=}\n{e}")
+            failed_ids = batch_requests.keys() - successful_ids
+            return results
+        else:
+            raise Exception(f"Batch job failed: {batch_job.status}")
+
+    def _generate_random_string(self, length: int = 3) -> str:
+        dt = datetime.now().strftime("%YY-%m-%dT%H:%M")
+        return dt + '_' + ''.join(random.choices(string.ascii_letters + string.digits, k=length))
