@@ -27,9 +27,11 @@ from openai_functionregistry.client import Client
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
+
 @dataclass
 class FunctionCall:
     """Function call arguments and the result of the function call."""
+
     arguments: type[BaseModel]
     result: Any
 
@@ -39,21 +41,25 @@ T = TypeVar("T", bound=BaseModel)
 
 class LLMError(Exception):
     """Base exception for LLM-related errors"""
+
     pass
 
 
 class ModelFailedError(LLMError):
     """Raised when both mini and regular models fail"""
+
     pass
 
 
 class MultipleToolCallsError(LLMError):
     """Raised when multiple tool calls are received but only one was expected"""
+
     pass
 
 
 class NoToolCallsError(LLMError):
     """Raised when no tool calls are received"""
+
     pass
 
 
@@ -109,17 +115,28 @@ class BaseRegistry:
     """Base registry for LLM function calls and parsing"""
 
     def __init__(
-        self, mini_client: Client, regular_client: Client, mini_async_client: Client, regular_async_client: Client, allow_fallback: bool = True
+        self,
+        mini_client: Client,
+        regular_client: Client,
+        mini_async_client: Client,
+        regular_async_client: Client,
+        mini_batch_client: Client,
+        regular_batch_client: Client,
+        allow_fallback: bool = True,
     ):
         self.allow_fallback = allow_fallback
         self.mini_client = mini_client
         self.regular_client = regular_client
         self.mini_async_client = mini_async_client
         self.regular_async_client = regular_async_client
+        self.mini_batch_client = mini_batch_client
+        self.regular_batch_client = regular_batch_client
 
-    def _get_client(self, is_mini: bool, async_: bool = False) -> Client:
+    def _get_client(self, is_mini: bool, async_: bool = False, batch: bool=False) -> Client:
         if async_:
             return self.mini_async_client if is_mini else self.regular_async_client
+        elif batch:
+            return self.mini_batch_client if is_mini else self.regular_batch_client
         return self.mini_client if is_mini else self.regular_client
 
     def _retry_chat(
@@ -441,7 +458,7 @@ class ParserRegistry(BaseRegistry):
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": tool_choice,
-                    "model": self.mini_client.model,
+                    "model": self.mini_batch_client.model if is_mini else self.regular_batch_client.model,
                     "temperature": temperature,
                 },
             }
@@ -451,13 +468,23 @@ class ParserRegistry(BaseRegistry):
             for request in batch_requests.values():
                 f.write(json.dumps(request) + "\n")
 
-        client = self.mini_client.client if is_mini else self.regular_client.client
+        client = self._get_client(is_mini=is_mini, batch=True).client
 
         batch_file = client.files.create(
             file=open(batch_file_path, "rb"), purpose="batch"
         )
         logging.info("Batch File ID: %s", batch_file.id)
 
+        # Wait for file upload
+        while True:
+            batch_file = client.files.retrieve(batch_file.id)
+            if batch_file.status  != 'pending':
+                break
+            else:
+                time.sleep(1)
+        if batch_file.status != "processed":
+            raise Exception(f"File upload failed {batch_file}")  # type:ignoe
+        # Initialize batch jobs from uploaded file
         batch_job = client.batches.create(
             input_file_id=batch_file.id,
             endpoint="/v1/chat/completions",
@@ -465,18 +492,19 @@ class ParserRegistry(BaseRegistry):
         )
         logging.info("Batch Job ID: %s", batch_job.id)
 
+        start_time = datetime.now()
         while True:
             batch_job = client.batches.retrieve(batch_job.id)
             if batch_job.status in ["completed", "failed"]:
                 break
             time.sleep(sleep_time)
 
-        logging.info("Batch Job Status: %s", batch_job.status)
+        duration = datetime.now() - start_time
+        logging.info(f"Batch Job finished in {duration} with status: %s", batch_job.status)
 
         if batch_job.status == "completed":
             output_file = client.files.content(batch_job.output_file_id)  # type: ignore
             results = []
-            successful_ids: set[str] = set()
 
             for line in output_file.iter_lines():
                 try:
@@ -500,14 +528,31 @@ class ParserRegistry(BaseRegistry):
                             logging.error(f"{response_model=}")
                             break
                     else:
-                        results.append(parsed_results)
-                        successful_ids.add(response["custom_id"])
+                        results.append((response, parsed_results))
                 except Exception as e:
                     logging.error(f"Failed to decode {line=}\n{e}")
-            failed_ids = batch_requests.keys() - successful_ids
+            # Use regular non-batch API for failed requests
+            failed_ids = list(batch_requests.keys() - set(r[0]["custom_id"] for r in results))
+            if failed_ids:
+                failed_ids.sort()
+                failed_messages_list = [
+                    batch_requests[id_]["body"]["messages"] for id_ in failed_ids
+                ]
+                more_results = self.parse_responses_batch_async(
+                    messages_list=failed_messages_list,
+                    model_subset=model_subset,
+                    target_model=target_model,
+                    is_mini=is_mini,
+                    max_retries=max_retries - 1,
+                    init_temperature=0.1,
+                )
+                more_results = list(zip(failed_ids, more_results))
+                results.extend(more_results)
+            # sort by custom_id in order to maintain original order
+            results.sort(key=lambda t: t[0]["custom_id"])
             return results
         else:
-            raise Exception(f"Batch job failed: {batch_job.status}")
+            raise Exception(f"Batch job failed: {batch_job.status}\n{batch_job.errors}")  # type:ignoe
 
     def _generate_random_string(self, length: int = 3) -> str:
         dt = datetime.now().strftime("%Y-%m-%dT%H:%M")
@@ -527,6 +572,7 @@ class ParserRegistry(BaseRegistry):
         init_temperature: float = 0,
     ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
         """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
+
         async def async_wrapper():
             results = await self._parse_responses_batch_async(
                 messages_list=messages_list,
@@ -625,13 +671,26 @@ class ParserRegistry(BaseRegistry):
                         )
                         exceptions.append(e)
 
-            raise ExceptionGroup(f"Failed after {max_retries} retries with both models", exceptions)
+            raise ExceptionGroup(
+                f"Failed after {max_retries} retries with both models", exceptions
+            )
 
         async def rate_limited_process(messages):
-            tokens = sum(map(len, client.encoder.encode_batch([' '.join(m.values()) for m in messages])))
+            tokens = sum(
+                map(
+                    len,
+                    client.encoder.encode_batch(
+                        [" ".join(m.values()) for m in messages]
+                    ),
+                )
+            )
             async with token_semaphore:
                 if tokens > client.tokens_per_minute_limit:
-                    logging.warning("Token limit hit: %d tokens requested, limit is %d", tokens, client.tokens_per_minute_limit)
+                    logging.warning(
+                        "Token limit hit: %d tokens requested, limit is %d",
+                        tokens,
+                        client.tokens_per_minute_limit,
+                    )
                 return await process_single_request(messages)
 
         tasks = [rate_limited_process(messages) for messages in messages_list]

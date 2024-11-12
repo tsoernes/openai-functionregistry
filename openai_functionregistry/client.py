@@ -132,12 +132,14 @@ class Client:
                 azure_endpoint=self.azure_endpoint,
                 api_key=self.api_key,
                 api_version=self.api_version,
+                # azure_deployment=self.model,
             )
         else:
             self.client = AzureOpenAI(
                 azure_endpoint=self.azure_endpoint,
                 api_key=self.api_key,
                 api_version=self.api_version,
+                # azure_deployment=self.model,
             )
         self.encoder = tiktoken.encoding_for_model(
             "gpt-4o"
