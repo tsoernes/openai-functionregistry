@@ -6,7 +6,7 @@ authors = ["Torstein Sørnes <t.soernes@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.12"
+python = "^3.11"
 betterpathlib = "^0.1.1"
 python-dotenv = "^1.0.1"
 openai = "^1.50.2"
