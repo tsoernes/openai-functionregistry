@@ -103,15 +103,15 @@ class Client:
         self.tokens_per_minute_limit = tokens_per_minute_limit
         self.requests_per_minute_limit = requests_per_minute_limit
         if is_mini:
-            self.azure_endpoint = os.environ["OAI-GPT4O-mini-18072024-ENDPOINT"]
-            self.api_key = os.environ["OAI-GPT4O-mini-18072024-API-KEY"]
+            self.azure_endpoint = os.environ["OAI_GPT4O_mini_18072024_ENDPOINT"]
+            self.api_key = os.environ["OAI_GPT4O_mini_18072024_API_KEY"]
             if batch:
                 self.model = "m-gpt-4o-mini-batch-18072024"
             else:
                 self.model = "m-gpt-4o-mini-18072024"
         else:
-            self.azure_endpoint = os.environ["OAI-GPT4O-06082024-ENDPOINT"]
-            self.api_key = os.environ["OAI-GPT4O-06082024-API-KEY"]
+            self.azure_endpoint = os.environ["OAI_GPT4O_06082024_ENDPOINT"]
+            self.api_key = os.environ["OAI_GPT4O_06082024_API_KEY"]
             self.model = "m-gpto-06082024"
             if batch:
                 raise ValueError()
