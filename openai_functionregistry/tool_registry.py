@@ -555,7 +555,7 @@ class ParserRegistry(BaseRegistry):
             raise Exception(f"Batch job failed: {batch_job.status}\n{batch_job.errors}")  # type:ignoe
 
     def _generate_random_string(self, length: int = 3) -> str:
-        dt = datetime.now().strftime("%Y-%m-%dT%H:%M")
+        dt = datetime.now().strftime("%Y-%m-%dT%H%M")
         return (
             dt
             + "_"
@@ -571,7 +571,9 @@ class ParserRegistry(BaseRegistry):
         max_retries: int = 5,
         init_temperature: float = 0,
     ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
-        """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
+        """
+        Parse multiple unstructured responses into structured data for a batch of messages asynchronously.
+        """
 
         async def async_wrapper():
             results = await self._parse_responses_batch_async(
