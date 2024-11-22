@@ -552,7 +552,7 @@ class ParserRegistry(BaseRegistry):
             results.sort(key=lambda t: t[0]["custom_id"])
             return results
         else:
-            raise Exception(f"Batch job failed: {batch_job.status}\n{batch_job.errors}")  # type:ignoe
+            raise Exception(f"Batch job failed: {batch_job.status}\n{batch_job.errors}")  # type:ignore
 
     def _generate_random_string(self, length: int = 3) -> str:
         dt = datetime.now().strftime("%Y-%m-%dT%H%M")
@@ -572,7 +572,8 @@ class ParserRegistry(BaseRegistry):
         init_temperature: float = 0,
     ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
         """
-        Parse multiple unstructured responses into structured data for a batch of messages asynchronously.
+        Parse multiple unstructured responses into structured data for a batch of
+        messages asynchronously.
         """
 
         async def async_wrapper():
@@ -619,9 +620,8 @@ class ParserRegistry(BaseRegistry):
             parsed_results = []
             for tool_call in tool_calls:
                 response_model = self.response_models[tool_call.function.name]
-                parsed_results.append(
-                    response_model.model_validate_json(tool_call.function.arguments)
-                )
+                model_inst = response_model.model_validate_json(tool_call.function.arguments)
+                parsed_results.append(model_inst)
             return parsed_results
 
         async def process_single_request(
@@ -629,6 +629,7 @@ class ParserRegistry(BaseRegistry):
         ) -> tuple[ChatCompletion, list[BaseModel]]:
             exceptions = []
 
+            client = self._get_client(is_mini=True, async_=True)
             for retry in range(max_retries):
                 temperature = 0.1 if retry > 0 else init_temperature
                 try:
