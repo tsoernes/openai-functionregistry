@@ -2,8 +2,10 @@
 Defines a `ParserRegistry` and a `FunctionRegistry` to make it convenient
 """
 
+from datetime import datetime, timedelta
+from typing import Any, TypeVar, Sequence
+from collections import deque
 import asyncio
-from datetime import datetime
 import json
 import time
 import random
@@ -13,7 +15,7 @@ import logging
 from dataclasses import dataclass
 from functools import wraps
 from typing import Any, TypeVar
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 
 from betterpathlib import Path
 import openai
@@ -62,6 +64,48 @@ class NoToolCallsError(LLMError):
 
     pass
 
+@dataclass
+class RequestMetrics:
+    """Tracks request and token counts within a time window"""
+    timestamp: datetime
+    token_count: int
+
+class AsyncRateLimiter:
+    """Rate limiter for async API calls that handles both request and token limits"""
+
+    def __init__(self, requests_per_minute: int, tokens_per_minute: int, window_size: int = 60):
+        self.requests_per_minute = requests_per_minute
+        self.tokens_per_minute = tokens_per_minute
+        self.window_size = window_size  # in seconds
+        self.request_history: deque[datetime] = deque()
+        self.token_history: deque[RequestMetrics] = deque()
+
+    async def acquire(self, token_count: int = 0):
+        """Wait until rate limits allow another request"""
+        while True:
+            current_time = datetime.now()
+            window_start = current_time - timedelta(seconds=self.window_size)
+
+            # Clean up old history
+            while self.request_history and self.request_history[0] < window_start:
+                self.request_history.popleft()
+            while self.token_history and self.token_history[0].timestamp < window_start:
+                self.token_history.popleft()
+
+            # Check both rate limits
+            current_requests = len(self.request_history)
+            current_tokens = sum(m.token_count for m in self.token_history)
+
+            if (current_requests < self.requests_per_minute and
+                current_tokens + token_count <= self.tokens_per_minute):
+                # Add new request to history
+                self.request_history.append(current_time)
+                if token_count > 0:
+                    self.token_history.append(RequestMetrics(current_time, token_count))
+                return
+
+            # Wait before checking again
+            await asyncio.sleep(0.1)
 
 # Do not retry on these exceptions as it is pointless.
 exclude_exceptions = (TypeError, openai.BadRequestError)
@@ -610,8 +654,11 @@ class ParserRegistry(BaseRegistry):
         )
 
         client = self._get_client(is_mini, async_=True)
-        request_semaphore = asyncio.Semaphore(client.requests_per_minute_limit)
-        token_semaphore = asyncio.Semaphore(client.tokens_per_minute_limit)
+        # Initialize rate limiter
+        rate_limiter = AsyncRateLimiter(
+            requests_per_minute=client.requests_per_minute_limit,
+            tokens_per_minute=client.tokens_per_minute_limit
+        )
 
         async def parse_result(response: ChatCompletion) -> list[BaseModel]:
             tool_calls = response.choices[0].message.tool_calls
@@ -630,17 +677,23 @@ class ParserRegistry(BaseRegistry):
             exceptions = []
 
             client = self._get_client(is_mini=True, async_=True)
+
+            # Calculate token count for this request
+            token_count = len(client.encoder.encode_batch(
+                [f"{m['role']} {m['content']}" for m in messages]
+            ))
+
             for retry_n in range(max_retries):
                 temperature = 0.1 if retry_n > 0 else init_temperature
                 try:
-                    async with request_semaphore:
-                        response = await client.client.chat.completions.create(
-                            model=client.model,
-                            messages=messages,
-                            tools=tools,
-                            temperature=temperature,
-                            tool_choice=tool_choice,  # type: ignore
-                        )
+                    await rate_limiter.acquire(token_count)
+                    response = await client.client.chat.completions.create(
+                        model=client.model,
+                        messages=messages,
+                        tools=tools,
+                        temperature=temperature,
+                        tool_choice=tool_choice,  # type: ignore
+                    )
                     result = await parse_result(response)
                     return response, result
                 except exclude_exceptions as e:
@@ -656,14 +709,14 @@ class ParserRegistry(BaseRegistry):
                 for retry in range(max_retries):
                     temperature = 0.1 if retry > 0 else init_temperature
                     try:
-                        async with request_semaphore:
-                            response = await client.client.chat.completions.create(
-                                model=client.model,
-                                messages=messages,
-                                tools=tools,
-                                temperature=temperature,
-                                tool_choice=tool_choice,  # type: ignore
-                            )
+                        await rate_limiter.acquire(token_count)
+                        response = await client.client.chat.completions.create(
+                            model=client.model,
+                            messages=messages,
+                            tools=tools,
+                            temperature=temperature,
+                            tool_choice=tool_choice,  # type: ignore
+                        )
                         result = await parse_result(response)
                         return response, result
                     except exclude_exceptions as e:
@@ -682,16 +735,7 @@ class ParserRegistry(BaseRegistry):
             )
 
         async def rate_limited_process(messages):
-            tokens = client.encoder.encode_batch([" ".join(f"{role} {content}" for role, content in m.items()) for m in messages])
-            tokens = sum(map(len, tokens))
-            async with token_semaphore:
-                if tokens > client.tokens_per_minute_limit:
-                    logging.warning(
-                        "Token limit hit: %d tokens requested, limit is %d",
-                        tokens,
-                        client.tokens_per_minute_limit,
-                    )
-                return await process_single_request(messages)
+            return await process_single_request(messages)
 
         tasks = [rate_limited_process(messages) for messages in messages_list]
         results_and_errs = await asyncio.gather(*tasks, return_exceptions=True)
