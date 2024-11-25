@@ -478,7 +478,7 @@ class ParserRegistry(BaseRegistry):
         # Wait for file upload
         while True:
             batch_file = client.files.retrieve(batch_file.id)
-            if batch_file.status  != 'pending':
+            if batch_file.status != 'pending':
                 break
             else:
                 time.sleep(1)
@@ -630,8 +630,8 @@ class ParserRegistry(BaseRegistry):
             exceptions = []
 
             client = self._get_client(is_mini=True, async_=True)
-            for retry in range(max_retries):
-                temperature = 0.1 if retry > 0 else init_temperature
+            for retry_n in range(max_retries):
+                temperature = 0.1 if retry_n > 0 else init_temperature
                 try:
                     async with request_semaphore:
                         response = await client.client.chat.completions.create(
@@ -647,7 +647,7 @@ class ParserRegistry(BaseRegistry):
                     raise e
                 except Exception as e:
                     logging.warning(
-                        f"Attempt {retry + 1} failed with mini model: {type(e).__name__}: {str(e)}"
+                        f"Attempt {retry_n + 1} failed with mini model: {type(e).__name__}: {str(e)}"
                     )
                     exceptions.append(e)
 
@@ -674,8 +674,11 @@ class ParserRegistry(BaseRegistry):
                         )
                         exceptions.append(e)
 
+                raise ExceptionGroup(
+                    f"Failed after {max_retries} retries with both models", exceptions
+                )
             raise ExceptionGroup(
-                f"Failed after {max_retries} retries with both models", exceptions
+                f"Failed after {max_retries} retries with mini models", exceptions
             )
 
         async def rate_limited_process(messages):
