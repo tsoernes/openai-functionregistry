@@ -132,7 +132,7 @@ class BaseRegistry:
         self.mini_batch_client = mini_batch_client
         self.regular_batch_client = regular_batch_client
 
-    def _get_client(self, is_mini: bool, async_: bool = False, batch: bool=False) -> Client:
+    def _get_client(self, is_mini: bool, async_: bool = False, batch: bool = False) -> Client:
         if async_:
             return self.mini_async_client if is_mini else self.regular_async_client
         elif batch:
@@ -596,7 +596,7 @@ class ParserRegistry(BaseRegistry):
         model_subset: str | list[str] | None = None,
         target_model: str | None = None,
         is_mini: bool = True,
-        max_retries: int = 5,
+        max_retries: int = 2,
         init_temperature: float = 0,
     ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
         """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
@@ -682,14 +682,8 @@ class ParserRegistry(BaseRegistry):
             )
 
         async def rate_limited_process(messages):
-            tokens = sum(
-                map(
-                    len,
-                    client.encoder.encode_batch(
-                        [" ".join(m.values()) for m in messages]
-                    ),
-                )
-            )
+            tokens = client.encoder.encode_batch([" ".join(f"{role} {content}" for role, content in m.items()) for m in messages])
+            tokens = sum(map(len, tokens))
             async with token_semaphore:
                 if tokens > client.tokens_per_minute_limit:
                     logging.warning(
