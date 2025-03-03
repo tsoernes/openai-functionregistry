@@ -99,30 +99,18 @@ class LLMCost:
 class Client:
     """Configuration for OpenAI model endpoints"""
 
-    def __init__(self, is_mini: bool = True,
-                 batch: bool = False,
+    def __init__(self, azure_endpoint: str,
+                 api_key: str,
+                 model: str,
                  async_: bool = False,
                  api_version: str | None = None,
                  tokens_per_minute_limit: int = 450_000,
                  requests_per_minute_limit: int = 4_500):
         self.tokens_per_minute_limit = tokens_per_minute_limit
         self.requests_per_minute_limit = requests_per_minute_limit
-        if is_mini:
-            self.azure_endpoint = os.environ["OAI_GPT4O_mini_18072024_ENDPOINT"]
-            self.api_key = os.environ["OAI_GPT4O_mini_18072024_API_KEY"]
-            if batch:
-                self.model = "m-gpt-4o-mini-batch-18072024"
-            else:
-                self.model = "m-gpt-4o-mini-18072024"
-        else:
-            self.azure_endpoint = os.environ["OAI_GPT4O_06082024_ENDPOINT"]
-            self.api_key = os.environ["OAI_GPT4O_06082024_API_KEY"]
-            self.model = "m-gpto-06082024"
-            if batch:
-                raise ValueError()
-
-        if api_version is None:
-            self.api_version = os.getenv("OAI-GPT4O-API-VERSION", "2024-08-01-preview")
+        self.azure_endpoint = azure_endpoint
+        self.api_key = api_key
+        self.async_ = async_
 
         if model_date := re.search(r"(\d\d\d\d\d\d\d\d)", self.model):
             self.model_version = datetime.datetime.strptime(
