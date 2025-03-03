@@ -114,13 +114,6 @@ class Client:
         self.api_version = api_version
         self.async_ = async_
 
-        if model_date := re.search(r"(\d\d\d\d\d\d\d\d)", self.model):
-            self.model_version = datetime.datetime.strptime(
-                model_date.group(1), "%d%m%Y"
-            )
-        else:
-            raise ValueError(f"Could not detect model version {self.model}")
-
         self.is_mini = is_mini
         if async_:
             self.client = AsyncAzureOpenAI(
@@ -155,7 +148,6 @@ class Client:
         """
         return calculate_cost(
             is_mini=self.is_mini,
-            model_version=self.model_version,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
@@ -163,7 +155,6 @@ class Client:
 
 def calculate_cost(
     is_mini: bool,
-    model_version: str | datetime.datetime,
     input_tokens: str | Iterable[str] | int = 0,
     output_tokens: str | Iterable[str] | int = 0,
 ) -> LLMCost:
@@ -171,30 +162,18 @@ def calculate_cost(
     tokens: a text string, a list of text strings, or the number of tokens (int)
     Returns a LLM cost object.
 
-    model_version: "%d%m%Y"
-
     In NOK.
 
     https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
     """
-    if isinstance(model_version, str):
-        if model_date := re.search(r"(\d\d\d\d\d\d\d\d)", model_version):
-            model_version = datetime.datetime.strptime(model_date.group(1), "%d%m%Y")
-        else:
-            raise ValueError(f"Could not detect model version {model_version}")
-
     if is_mini:
         # GPT-4o-mini Regional API
         cost_per_1m_inp_nok = 1.735108
         cost_per_1m_out_nok = 6.94043
-    elif model_version >= datetime.datetime(year=2024, month=8, day=6):
+    else:
         # gpt-4o-2024-08-06 Global Deployment
         cost_per_1m_inp_nok = 26.2896
         cost_per_1m_out_nok = 105.158001
-    else:
-        # GPT-4o Global Deployment
-        cost_per_1m_inp_nok = 52.5791
-        cost_per_1m_out_nok = 157.7371
 
     encoder = tiktoken.encoding_for_model(
         "gpt-4o"
