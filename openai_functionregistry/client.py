@@ -102,14 +102,16 @@ class Client:
     def __init__(self, azure_endpoint: str,
                  api_key: str,
                  model: str,
+                 api_version: str,
                  async_: bool = False,
-                 api_version: str | None = None,
                  tokens_per_minute_limit: int = 450_000,
                  requests_per_minute_limit: int = 4_500):
         self.tokens_per_minute_limit = tokens_per_minute_limit
         self.requests_per_minute_limit = requests_per_minute_limit
         self.azure_endpoint = azure_endpoint
         self.api_key = api_key
+        self.model = model
+        self.api_version = api_version
         self.async_ = async_
 
         if model_date := re.search(r"(\d\d\d\d\d\d\d\d)", self.model):
