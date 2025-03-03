@@ -114,7 +114,6 @@ class Client:
         self.api_version = api_version
         self.async_ = async_
 
-        self.is_mini = is_mini
         if async_:
             self.client = AsyncAzureOpenAI(
                 azure_endpoint=self.azure_endpoint,
@@ -147,7 +146,7 @@ class Client:
         https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/
         """
         return calculate_cost(
-            is_mini=self.is_mini,
+            is_mini="mini" in self.model.lower(),
             input_tokens=input_tokens,
             output_tokens=output_tokens,
         )
