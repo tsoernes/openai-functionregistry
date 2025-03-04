@@ -30,15 +30,16 @@ from openai_functionregistry.client import Client
 logging.basicConfig(level=logging.INFO)
 
 
+Model = TypeVar("Model", bound=BaseModel)
+
 @dataclass
 class FunctionCall:
     """Function call arguments and the result of the function call."""
 
-    arguments: type[BaseModel]
+    arguments: Model
     result: Any
 
 
-T = TypeVar("T", bound=BaseModel)
 
 
 class LLMError(Exception):
@@ -187,12 +188,12 @@ class BaseRegistry:
         self,
         messages: Sequence[ChatCompletionMessageParam],
         tools: list[ChatCompletionToolParam],
-        parse_fn: Callable[[ChatCompletion], T],
+        parse_fn: Callable[[ChatCompletion], Model],
         is_mini: bool,
         max_retries: int = 5,
         retry_temperature: float = 0.1,
         tool_choice: Any = NOT_GIVEN,
-    ) -> tuple[ChatCompletion, T]:
+    ) -> tuple[ChatCompletion, Model]:
         """Generic retry logic for chat completions"""
         client = self._get_client(is_mini)
         exceptions = []
@@ -231,8 +232,8 @@ class FunctionRegistry(BaseRegistry):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.paramdef_to_function: dict[type[BaseModel], Callable] = {}
-        self.name_to_paramdef: dict[str, type[BaseModel]] = {}
+        self.paramdef_to_function: dict[Model, Callable] = {}
+        self.name_to_paramdef: dict[str, Model] = {}
 
     def __str__(self) -> str:
         return str(self.paramdef_to_function)
@@ -240,11 +241,11 @@ class FunctionRegistry(BaseRegistry):
     __repr__ = __str__
 
     def register(
-        self, func: Callable, param_model: type[BaseModel] | None = None
+        self, func: Callable, param_model: Model | None = None
     ) -> None:
         """
         Register a function with optional parameter specification.
-        If param_model is not provided, the first parameter must be a BaseModel.
+        If param_model is not provided, the first parameter must be a Model.
         If param_model is provided, its fields must match the function parameters.
         """
         sig = inspect.signature(func)
@@ -254,7 +255,7 @@ class FunctionRegistry(BaseRegistry):
             raise ValueError("Function must have at least one parameter")
 
         if param_model is None:
-            # Traditional case: first parameter must be BaseModel
+            # Traditional case: first parameter must be Model
             if not issubclass(params[0].annotation, BaseModel):
                 raise ValueError(
                     "Function must have BaseModel parameter specification or provide param_model"
@@ -319,7 +320,7 @@ class FunctionRegistry(BaseRegistry):
             else NOT_GIVEN
         )
 
-        def parse_response(response: ChatCompletion) -> list[BaseModel]:
+        def parse_response(response: ChatCompletion) -> list[Model]:
             tool_calls = response.choices[0].message.tool_calls
             if not tool_calls:
                 return []
@@ -375,14 +376,14 @@ class ParserRegistry(BaseRegistry):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.response_models: dict[str, type[BaseModel]] = {}
+        self.response_models: dict[str, Model] = {}
 
     def __str__(self) -> str:
         return str(self.response_models)
 
     __repr__ = __str__
 
-    def register(self, model: type[BaseModel]) -> None:
+    def register(self, model: Model) -> None:
         """Register a response model"""
         self.response_models[model.__name__] = model
 
@@ -417,7 +418,7 @@ class ParserRegistry(BaseRegistry):
         target_model: str | None = None,
         is_mini: bool = True,
         max_retries: int = 5,
-    ) -> tuple[ChatCompletion, list[BaseModel]]:
+    ) -> tuple[ChatCompletion, list[Model]]:
         """Parse multiple unstructured responses into structured data"""
         if target_model:
             model_subset = [target_model]
@@ -428,7 +429,7 @@ class ParserRegistry(BaseRegistry):
             else NOT_GIVEN
         )
 
-        def parse_result(response: ChatCompletion) -> list[BaseModel]:
+        def parse_result(response: ChatCompletion) -> list[Model]:
             tool_calls = response.choices[0].message.tool_calls
             if not tool_calls:
                 return []
@@ -457,7 +458,7 @@ class ParserRegistry(BaseRegistry):
         model_subset: str | list[str] | None = None,
         target_model: str | None = None,
         is_mini: bool = True,
-    ) -> tuple[ChatCompletion, BaseModel]:
+    ) -> tuple[ChatCompletion, Model]:
         """Parse a single unstructured response into structured data, raise exception if multiple tool calls are returned"""
         response, results = self.parse_responses(
             messages=messages,  # type: ignore
@@ -481,7 +482,7 @@ class ParserRegistry(BaseRegistry):
         custom_id: str | None = None,
         sleep_time: float = 10,
         temperature: float = 0,
-    ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+    ) -> list[tuple[ChatCompletion, list[Model]]]:
         """Parse multiple lists of unstructured responses into structured data using the Azure OpenAI Batch API"""
         if custom_id is None:
             custom_id = f"{self._generate_random_string()}"
@@ -614,7 +615,7 @@ class ParserRegistry(BaseRegistry):
         is_mini: bool = True,
         max_retries: int = 5,
         init_temperature: float = 0,
-    ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+    ) -> list[tuple[ChatCompletion, list[Model]]]:
         """
         Parse multiple unstructured responses into structured data for a batch of
         messages asynchronously.
@@ -642,7 +643,7 @@ class ParserRegistry(BaseRegistry):
         is_mini: bool = True,
         max_retries: int = 2,
         init_temperature: float = 0,
-    ) -> list[tuple[ChatCompletion, list[BaseModel]]]:
+    ) -> list[tuple[ChatCompletion, list[Model]]]:
         """Parse multiple unstructured responses into structured data for a batch of messages asynchronously."""
         if target_model:
             model_subset = [target_model]
@@ -660,7 +661,7 @@ class ParserRegistry(BaseRegistry):
             tokens_per_minute=client.tokens_per_minute_limit
         )
 
-        async def parse_result(response: ChatCompletion) -> list[BaseModel]:
+        async def parse_result(response: ChatCompletion) -> list[Model]:
             tool_calls = response.choices[0].message.tool_calls
             if not tool_calls:
                 return []
@@ -673,7 +674,7 @@ class ParserRegistry(BaseRegistry):
 
         async def process_single_request(
             messages: Sequence[ChatCompletionMessageParam],
-        ) -> tuple[ChatCompletion, list[BaseModel]]:
+        ) -> tuple[ChatCompletion, list[Model]]:
             exceptions = []
 
             client = self._get_client(is_mini=True, async_=True)
