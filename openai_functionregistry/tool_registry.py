@@ -241,7 +241,7 @@ class FunctionRegistry(BaseRegistry):
     __repr__ = __str__
 
     def register(
-        self, func: Callable, param_model: Model | None = None
+        self, func: Callable, param_model: Type[Model] | None = None
     ) -> None:
         """
         Register a function with optional parameter specification.
@@ -383,7 +383,7 @@ class ParserRegistry(BaseRegistry):
 
     __repr__ = __str__
 
-    def register(self, model: Model) -> None:
+    def register(self, model: type[Model]) -> None:
         """Register a response model"""
         self.response_models[model.__name__] = model
 
