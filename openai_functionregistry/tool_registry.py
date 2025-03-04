@@ -241,7 +241,7 @@ class FunctionRegistry(BaseRegistry):
     __repr__ = __str__
 
     def register(
-        self, func: Callable, param_model: Type[Model] | None = None
+        self, func: Callable, param_model: type[Model] | None = None
     ) -> None:
         """
         Register a function with optional parameter specification.
