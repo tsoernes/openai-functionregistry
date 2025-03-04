@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "openai_functionregistry"
-version = "0.2.3"
+version = "0.2.4"
 description = "OpenAI Function and Parser Registry"
 authors = ["Torstein Sørnes <t.soernes@gmail.com>"]
 readme = "README.md"
