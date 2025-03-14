@@ -2,25 +2,25 @@
 Defines a `ParserRegistry` and a `FunctionRegistry` to make it convenient
 """
 
-from datetime import datetime, timedelta
-from typing import Any, TypeVar, Sequence
-from collections import deque
 import asyncio
+import inspect
 import json
-import time
+import logging
 import random
 import string
-import inspect
-import logging
-from dataclasses import dataclass
-from functools import wraps
-from typing import Any, TypeVar
+import time
+from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from functools import wraps
+from typing import Any, Sequence, TypeVar
 
-from betterpathlib import Path
 import openai
+from betterpathlib import Path
 from openai import NOT_GIVEN
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
+from openai.types.chat import (ChatCompletionMessageParam,
+                               ChatCompletionToolParam)
 from openai.types.chat.chat_completion import ChatCompletion
 from pydantic import BaseModel
 
@@ -32,14 +32,13 @@ logging.basicConfig(level=logging.INFO)
 
 Model = TypeVar("Model", bound=BaseModel)
 
+
 @dataclass
 class FunctionCall:
     """Function call arguments and the result of the function call."""
 
     arguments: Model
     result: Any
-
-
 
 
 class LLMError(Exception):
@@ -65,16 +64,21 @@ class NoToolCallsError(LLMError):
 
     pass
 
+
 @dataclass
 class RequestMetrics:
     """Tracks request and token counts within a time window"""
+
     timestamp: datetime
     token_count: int
+
 
 class AsyncRateLimiter:
     """Rate limiter for async API calls that handles both request and token limits"""
 
-    def __init__(self, requests_per_minute: int, tokens_per_minute: int, window_size: int = 60):
+    def __init__(
+        self, requests_per_minute: int, tokens_per_minute: int, window_size: int = 60
+    ):
         self.requests_per_minute = requests_per_minute
         self.tokens_per_minute = tokens_per_minute
         self.window_size = window_size  # in seconds
@@ -97,8 +101,10 @@ class AsyncRateLimiter:
             current_requests = len(self.request_history)
             current_tokens = sum(m.token_count for m in self.token_history)
 
-            if (current_requests < self.requests_per_minute and
-                current_tokens + token_count <= self.tokens_per_minute):
+            if (
+                current_requests < self.requests_per_minute
+                and current_tokens + token_count <= self.tokens_per_minute
+            ):
                 # Add new request to history
                 self.request_history.append(current_time)
                 if token_count > 0:
@@ -107,6 +113,7 @@ class AsyncRateLimiter:
 
             # Wait before checking again
             await asyncio.sleep(0.1)
+
 
 # Do not retry on these exceptions as it is pointless.
 exclude_exceptions = (TypeError, openai.BadRequestError)
@@ -177,7 +184,9 @@ class BaseRegistry:
         self.mini_batch_client = mini_batch_client
         self.regular_batch_client = regular_batch_client
 
-    def _get_client(self, is_mini: bool, async_: bool = False, batch: bool = False) -> Client:
+    def _get_client(
+        self, is_mini: bool, async_: bool = False, batch: bool = False
+    ) -> Client:
         if async_:
             return self.mini_async_client if is_mini else self.regular_async_client
         elif batch:
@@ -240,9 +249,7 @@ class FunctionRegistry(BaseRegistry):
 
     __repr__ = __str__
 
-    def register(
-        self, func: Callable, param_model: type[Model] | None = None
-    ) -> None:
+    def register(self, func: Callable, param_model: type[Model] | None = None) -> None:
         """
         Register a function with optional parameter specification.
         If param_model is not provided, the first parameter must be a Model.
@@ -503,7 +510,11 @@ class ParserRegistry(BaseRegistry):
                     "messages": messages,
                     "tools": tools,
                     "tool_choice": tool_choice,
-                    "model": self.mini_batch_client.model if is_mini else self.regular_batch_client.model,
+                    "model": (
+                        self.mini_batch_client.model
+                        if is_mini
+                        else self.regular_batch_client.model
+                    ),
                     "temperature": temperature,
                 },
             }
@@ -523,7 +534,7 @@ class ParserRegistry(BaseRegistry):
         # Wait for file upload
         while True:
             batch_file = client.files.retrieve(batch_file.id)
-            if batch_file.status != 'pending':
+            if batch_file.status != "pending":
                 break
             else:
                 time.sleep(1)
@@ -545,7 +556,9 @@ class ParserRegistry(BaseRegistry):
             time.sleep(sleep_time)
 
         duration = datetime.now() - start_time
-        logging.info(f"Batch Job finished in {duration} with status: %s", batch_job.status)
+        logging.info(
+            f"Batch Job finished in {duration} with status: %s", batch_job.status
+        )
 
         if batch_job.status == "completed":
             output_file = client.files.content(batch_job.output_file_id)  # type: ignore
@@ -577,7 +590,9 @@ class ParserRegistry(BaseRegistry):
                 except Exception as e:
                     logging.error(f"Failed to decode {line=}\n{e}")
             # Use regular non-batch API for failed requests
-            failed_ids = list(batch_requests.keys() - set(r[0]["custom_id"] for r in results))
+            failed_ids = list(
+                batch_requests.keys() - set(r[0]["custom_id"] for r in results)
+            )
             if failed_ids:
                 failed_ids.sort()
                 failed_messages_list = [
@@ -658,7 +673,7 @@ class ParserRegistry(BaseRegistry):
         # Initialize rate limiter
         rate_limiter = AsyncRateLimiter(
             requests_per_minute=client.requests_per_minute_limit,
-            tokens_per_minute=client.tokens_per_minute_limit
+            tokens_per_minute=client.tokens_per_minute_limit,
         )
 
         async def parse_result(response: ChatCompletion) -> list[Model]:
@@ -668,7 +683,9 @@ class ParserRegistry(BaseRegistry):
             parsed_results = []
             for tool_call in tool_calls:
                 response_model = self.response_models[tool_call.function.name]
-                model_inst = response_model.model_validate_json(tool_call.function.arguments)
+                model_inst = response_model.model_validate_json(
+                    tool_call.function.arguments
+                )
                 parsed_results.append(model_inst)
             return parsed_results
 
@@ -680,43 +697,27 @@ class ParserRegistry(BaseRegistry):
             client = self._get_client(is_mini=True, async_=True)
 
             # Calculate token count for this request
-            token_count = len(client.encoder.encode_batch(
-                [f"{m['role']} {m['content']}" for m in messages]
-            ))
-
-            for retry_n in range(max_retries):
-                temperature = 0.1 if retry_n > 0 else init_temperature
-                try:
-                    await rate_limiter.acquire(token_count)
-                    response = await client.client.chat.completions.create(
-                        model=client.model,
-                        messages=messages,
-                        tools=tools,
-                        temperature=temperature,
-                        tool_choice=tool_choice,  # type: ignore
-                    )
-                    result = await parse_result(response)
-                    return response, result
-                except exclude_exceptions as e:
-                    raise e
-                except Exception as e:
-                    logging.warning(
-                        f"Attempt {retry_n + 1} failed with mini model: {type(e).__name__}: {str(e)}"
-                    )
-                    exceptions.append(e)
-
-            if self.allow_fallback:
-                client = self._get_client(is_mini=False, async_=True)
-                for retry in range(max_retries):
-                    temperature = 0.1 if retry > 0 else init_temperature
+            token_count = len(
+                client.encoder.encode_batch(
+                    [f"{m['role']} {m['content']}" for m in messages]
+                )
+            )
+            client_kwargs = {
+                "model": client.model,
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": tool_choice,  # type: ignore
+            }
+            if "o1" in client.model or "o3" in client.model:
+                client_kwargs["reasoning_effor"] = "full"
+            else:
+                for retry_n in range(max_retries):
+                    temperature = 0.1 if retry_n > 0 else init_temperature
+                    client_kwargs["temperature"] = temperature
                     try:
                         await rate_limiter.acquire(token_count)
                         response = await client.client.chat.completions.create(
-                            model=client.model,
-                            messages=messages,
-                            tools=tools,
-                            temperature=temperature,
-                            tool_choice=tool_choice,  # type: ignore
+                            **client_kwargs
                         )
                         result = await parse_result(response)
                         return response, result
@@ -724,16 +725,37 @@ class ParserRegistry(BaseRegistry):
                         raise e
                     except Exception as e:
                         logging.warning(
-                            f"Attempt {retry + 1} failed with regular model: {type(e).__name__}: {str(e)}"
+                            f"Attempt {retry_n + 1} failed with mini model: {type(e).__name__}: {str(e)}"
                         )
                         exceptions.append(e)
 
+                if self.allow_fallback:
+                    client = self._get_client(is_mini=False, async_=True)
+                    for retry in range(max_retries):
+                        temperature = 0.1 if retry > 0 else init_temperature
+                        client_kwargs["temperature"] = temperature
+                        try:
+                            await rate_limiter.acquire(token_count)
+                            response = await client.client.chat.completions.create(
+                                **client_kwargs
+                            )
+                            result = await parse_result(response)
+                            return response, result
+                        except exclude_exceptions as e:
+                            raise e
+                        except Exception as e:
+                            logging.warning(
+                                f"Attempt {retry + 1} failed with regular model: {type(e).__name__}: {str(e)}"
+                            )
+                            exceptions.append(e)
+
+                    raise ExceptionGroup(
+                        f"Failed after {max_retries} retries with both models",
+                        exceptions,
+                    )
                 raise ExceptionGroup(
-                    f"Failed after {max_retries} retries with both models", exceptions
+                    f"Failed after {max_retries} retries with mini models", exceptions
                 )
-            raise ExceptionGroup(
-                f"Failed after {max_retries} retries with mini models", exceptions
-            )
 
         async def rate_limited_process(messages):
             return await process_single_request(messages)
