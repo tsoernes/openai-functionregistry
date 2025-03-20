@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "openai_functionregistry"
-version = "0.2.6"
+version = "0.2.10"
 description = "OpenAI Function and Parser Registry"
 authors = ["Torstein Sørnes <t.soernes@gmail.com>"]
 readme = "README.md"
@@ -12,6 +12,8 @@ python-dotenv = "^1.0.1"
 openai = "^1.50.2"
 pydantic = "^2.9.2"
 tiktoken = "^0.9.0"
+azure-ai-inference = "^1.0.0b9"
+aiohttp = "^3.11.14"
 
 [tool.poetry.group.dev.dependencies]
 ipython = "^8.27.0"

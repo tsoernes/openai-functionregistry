@@ -5,8 +5,10 @@ from dataclasses import dataclass
 from typing import Iterable
 
 import tiktoken
+from azure.ai.inference.aio import ChatCompletionsClient
+from azure.ai.inference.models import SystemMessage, UserMessage
+from azure.core.credentials import AzureKeyCredential
 from dotenv import load_dotenv
-from openai import AsyncAzureOpenAI, AzureOpenAI
 
 load_dotenv()
 
@@ -99,37 +101,35 @@ class LLMCost:
 class Client:
     """Configuration for OpenAI model endpoints"""
 
-    def __init__(self, azure_endpoint: str,
-                 api_key: str,
-                 model: str,
-                 api_version: str,
-                 async_: bool = False,
-                 tokens_per_minute_limit: int = 450_000,
-                 requests_per_minute_limit: int = 4_500):
-        self.tokens_per_minute_limit = tokens_per_minute_limit
-        self.requests_per_minute_limit = requests_per_minute_limit
-        self.azure_endpoint = azure_endpoint
+    def __init__(
+        self,
+        endpoint: str,
+        api_key: str,
+        model: str,
+        api_version: str,
+        async_: bool = False,
+        tokens_per_minute_limit: int = 450_000,
+        requests_per_minute_limit: int = 4_500,
+        encoder_model="gpt-4o",
+    ):
+        self.endpoint = endpoint
         self.api_key = api_key
         self.model = model
         self.api_version = api_version
         self.async_ = async_
+        self.tokens_per_minute_limit = tokens_per_minute_limit
+        self.requests_per_minute_limit = requests_per_minute_limit
+        self.async_ = async_
 
-        if async_:
-            self.client = AsyncAzureOpenAI(
-                azure_endpoint=self.azure_endpoint,
-                api_key=self.api_key,
-                api_version=self.api_version,
-                # azure_deployment=self.model,
-            )
-        else:
-            self.client = AzureOpenAI(
-                azure_endpoint=self.azure_endpoint,
-                api_key=self.api_key,
-                api_version=self.api_version,
-                # azure_deployment=self.model,
-            )
+        self.client = ChatCompletionsClient(
+            endpoint=endpoint,
+            credential=AzureKeyCredential(api_key),
+            model=model,
+            api_version=api_version,
+        )
+
         self.encoder = tiktoken.encoding_for_model(
-            "gpt-4o"
+            encoder_model
         )  # same encoding with 4o-mini as with 4o
 
     def calculate_cost(

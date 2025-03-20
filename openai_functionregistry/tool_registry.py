@@ -169,27 +169,19 @@ class BaseRegistry:
     def __init__(
         self,
         mini_client: Client,
-        regular_client: Client,
-        mini_async_client: Client,
-        regular_async_client: Client,
-        mini_batch_client: Client,
-        regular_batch_client: Client,
+        regular_client: Client | None = None,
+        mini_batch_client: Client | None = None,
+        regular_batch_client: Client | None = None,
         allow_fallback: bool = True,
     ):
         self.allow_fallback = allow_fallback
         self.mini_client = mini_client
         self.regular_client = regular_client
-        self.mini_async_client = mini_async_client
-        self.regular_async_client = regular_async_client
         self.mini_batch_client = mini_batch_client
         self.regular_batch_client = regular_batch_client
 
-    def _get_client(
-        self, is_mini: bool, async_: bool = False, batch: bool = False
-    ) -> Client:
-        if async_:
-            return self.mini_async_client if is_mini else self.regular_async_client
-        elif batch:
+    def _get_client(self, is_mini: bool, batch: bool = False) -> Client:
+        if batch:
             return self.mini_batch_client if is_mini else self.regular_batch_client
         return self.mini_client if is_mini else self.regular_client
 
@@ -207,33 +199,40 @@ class BaseRegistry:
         client = self._get_client(is_mini)
         exceptions = []
 
-        for retry in range(max_retries):
-            temperature = retry_temperature if retry > 0 else 0
-            try:
-                response = client.client.chat.completions.create(
-                    model=client.model,
-                    messages=messages,
-                    tools=tools,
-                    temperature=temperature,
-                    tool_choice=tool_choice,
-                )
-                result = parse_fn(response)
-                return response, result
-            except exclude_exceptions as e:
-                raise e
-            except Exception as e:
-                logging.warning(
-                    f"Attempt {retry + 1} failed: {type(e).__name__}: {str(e)}"
-                )
-                logging.debug(
-                    f"Attempt {retry + 1}/{max_retries} with temperature={temperature}"
-                )
-                logging.debug(f"Messages:\n{messages}")
-                logging.debug(f"Tools:\n{tools}")
+        client_kwargs = {
+            "model": client.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,  # type: ignore
+        }
+        if "o1" in client.model or "o3" in client.model:
+            client_kwargs["reasoning_effort"] = "high"
+            response = client.client.complete(**client_kwargs)
+            result = parse_fn(response)
+            return response, result
+        else:
+            for retry in range(max_retries):
+                temperature = retry_temperature if retry > 0 else 0
+                client_kwargs["temperature"] = temperature
+                try:
+                    response = client.client.complete(**client_kwargs)
+                    result = parse_fn(response)
+                    return response, result
+                except exclude_exceptions as e:
+                    raise e
+                except Exception as e:
+                    logging.warning(
+                        f"Attempt {retry + 1} failed: {type(e).__name__}: {str(e)}"
+                    )
+                    logging.debug(
+                        f"Attempt {retry + 1}/{max_retries} with temperature={temperature}"
+                    )
+                    logging.debug(f"Messages:\n{messages}")
+                    logging.debug(f"Tools:\n{tools}")
 
-                exceptions.append(e)
+                    exceptions.append(e)
 
-        raise ExceptionGroup(f"Failed after {max_retries} retries", exceptions)
+            raise ExceptionGroup(f"Failed after {max_retries} retries", exceptions)
 
 
 class FunctionRegistry(BaseRegistry):
@@ -669,7 +668,7 @@ class ParserRegistry(BaseRegistry):
             else NOT_GIVEN
         )
 
-        client = self._get_client(is_mini, async_=True)
+        client = self._get_client(is_mini)
         # Initialize rate limiter
         rate_limiter = AsyncRateLimiter(
             requests_per_minute=client.requests_per_minute_limit,
@@ -694,7 +693,7 @@ class ParserRegistry(BaseRegistry):
         ) -> tuple[ChatCompletion, list[Model]]:
             exceptions = []
 
-            client = self._get_client(is_mini=True, async_=True)
+            client = self._get_client(is_mini=True)
 
             # Calculate token count for this request
             token_count = len(
@@ -709,16 +708,18 @@ class ParserRegistry(BaseRegistry):
                 "tool_choice": tool_choice,  # type: ignore
             }
             if "o1" in client.model or "o3" in client.model:
-                client_kwargs["reasoning_effor"] = "full"
+                client_kwargs["reasoning_effort"] = "high"
+                await rate_limiter.acquire(token_count)
+                response = await client.client.complete(**client_kwargs)
+                result = await parse_result(response)
+                return response, result
             else:
                 for retry_n in range(max_retries):
                     temperature = 0.1 if retry_n > 0 else init_temperature
                     client_kwargs["temperature"] = temperature
                     try:
                         await rate_limiter.acquire(token_count)
-                        response = await client.client.chat.completions.create(
-                            **client_kwargs
-                        )
+                        response = await client.client.complete(**client_kwargs)
                         result = await parse_result(response)
                         return response, result
                     except exclude_exceptions as e:
@@ -730,15 +731,13 @@ class ParserRegistry(BaseRegistry):
                         exceptions.append(e)
 
                 if self.allow_fallback:
-                    client = self._get_client(is_mini=False, async_=True)
+                    client = self._get_client(is_mini=False)
                     for retry in range(max_retries):
                         temperature = 0.1 if retry > 0 else init_temperature
                         client_kwargs["temperature"] = temperature
                         try:
                             await rate_limiter.acquire(token_count)
-                            response = await client.client.chat.completions.create(
-                                **client_kwargs
-                            )
+                            response = await client.client.complete(**client_kwargs)
                             result = await parse_result(response)
                             return response, result
                         except exclude_exceptions as e:

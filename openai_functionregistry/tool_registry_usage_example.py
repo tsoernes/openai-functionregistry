@@ -48,11 +48,10 @@ class WeatherResponse(BaseModel):
 
 def main():
     # Create shared clients
-    mini_client = Client(is_mini=True)
-    regular_client = Client(is_mini=False)
+    client = Client()
 
     # Register function calls
-    func_registry = FunctionRegistry(mini_client, regular_client)
+    func_registry = FunctionRegistry(client)
     # Register with explicit param model
     func_registry.register(get_weather, GetWeather)
     # Or register a function that takes a parameter spec as the first argument and autodetect parameter model
@@ -130,5 +129,98 @@ def main():
     print(f"Parsed response: {weather_responses}")
 
 
+def main2():
+    # Create shared clients
+    api_key = "BgY2C2nf99YAueo4pTAbye7nnhDYZdkwcalJCYLsutYgLrqVSBRcJQQJ99BCACfhMk5XJ3w3AAAAACOG96ux"
+    endpoint = "https://foundry22786441518.services.ai.azure.com/models"
+    api_version = "2024-05-01-preview"
+    model = "DeepSeek-R1"
+    client = Client(
+        endpoint=endpoint,
+        api_key=api_key,
+        model=model,
+        api_version=api_version,
+    )
+
+    # Register function calls
+    func_registry = FunctionRegistry(client)
+    # Register with explicit param model
+    func_registry.register(get_weather, GetWeather)
+    # Or register a function that takes a parameter spec as the first argument and autodetect parameter model
+    # func_registry.register(get_weather_alt)
+
+    # Make function call
+    messages = [
+        {"role": "system", "content": "Extract the weather information."},
+        {"role": "user", "content": "What's the weather like in London?"},
+    ]
+    response1, funcion_call1 = func_registry.call_function(
+        # messages, target_function="GetWeather"
+        messages
+    )
+
+    # Parse the result
+    parser_registry = ParserRegistry(mini_client, regular_client)
+    parser_registry.register(WeatherResponse)
+
+    # The previous messages are not required in order to parse the response.
+    parse_messages = [
+        response1.choices[0].message.model_dump(),
+        {
+            "role": "tool",
+            "content": function_call1.result,
+            "tool_call_id": get_tool_call_id(response1),
+        },
+    ]
+
+    response2, weather_response = parser_registry.parse_response(
+        messages=parse_messages,
+        target_model="WeatherResponse",
+    )
+
+    print(f"Parsed response: {weather_response}")
+
+    ### TRY MULTIPLE TOOL CALLS. Get the weather for London and New York at the same time.
+
+    # Make function call
+    messages = [
+        {"role": "system", "content": "Extract the weather information."},
+        {"role": "user", "content": "What's the weather like in London and New York??"},
+    ]
+
+    # NOTE: When `func_registry.call_functions` is given a `target_function`
+    # (i.e. `chat_completion` is given a `tool_choice`), then it only returns one input
+    # even though it might be proper to return many.
+    # Use `function_subset` to attempt restrict the model to a specific function instead
+
+    response3, function_calls3 = func_registry.call_functions(messages)
+
+    # The previous messages are not required in order to parse the response.
+    parse_messages = [
+        {
+            "role": "system",
+            "content": "Call the supplied functions in order to structure the given information:",
+        },
+        response1.choices[0].message.model_dump(),
+    ]
+    for function_call, tool_call_id in zip(
+        function_calls3, get_tool_call_ids(response1)
+    ):
+        parse_messages.append(
+            {
+                "role": "tool",
+                "content": function_call.result,
+                "tool_call_id": tool_call_id,
+            },
+        )
+
+    response4, weather_responses = parser_registry.parse_responses(
+        messages=parse_messages,
+        model_subset=["WeatherResponse"],
+    )
+
+    print(f"Parsed response: {weather_responses}")
+
+
 if __name__ == "__main__":
-    main()
+    main2()
