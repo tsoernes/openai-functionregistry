@@ -17,6 +17,7 @@ from functools import wraps
 from typing import Any, Sequence, TypeVar
 
 import google.generativeai as genai
+from google.generativeai import protos
 from betterpathlib import Path
 from pydantic import BaseModel
 
@@ -172,19 +173,71 @@ def get_tool_call_ids(response) -> list[str]:
     return [f"call_{hash(str(fc))}" for fc in function_calls]
 
 
-def pydantic_to_gemini_function(model_class: type[BaseModel]) -> dict:
+def pydantic_to_gemini_function(model_class: type[BaseModel]) -> protos.FunctionDeclaration:
     """Convert a Pydantic model to Gemini function declaration format"""
     schema = model_class.model_json_schema()
     
-    return {
-        "name": model_class.__name__,
-        "description": schema.get("description", model_class.__doc__ or ""),
-        "parameters": {
-            "type": "object",
-            "properties": schema.get("properties", {}),
-            "required": schema.get("required", [])
-        }
-    }
+    # Convert properties to Gemini Schema format
+    properties = {}
+    if "properties" in schema:
+        for name, prop in schema["properties"].items():
+            prop_schema = protos.Schema()
+            
+            # Handle $ref (references to definitions)
+            if "$ref" in prop:
+                ref_path = prop["$ref"]
+                if ref_path.startswith("#/$defs/"):
+                    def_name = ref_path.split("/")[-1]
+                    if "$defs" in schema and def_name in schema["$defs"]:
+                        def_schema = schema["$defs"][def_name]
+                        prop = {**prop, **def_schema}  # Merge the definition
+            
+            # Handle type mapping
+            if prop.get("type") == "string":
+                prop_schema.type_ = protos.Type.STRING
+            elif prop.get("type") == "integer":
+                prop_schema.type_ = protos.Type.INTEGER
+            elif prop.get("type") == "number":
+                prop_schema.type_ = protos.Type.NUMBER
+            elif prop.get("type") == "boolean":
+                prop_schema.type_ = protos.Type.BOOLEAN
+            elif prop.get("type") == "array":
+                prop_schema.type_ = protos.Type.ARRAY
+            elif prop.get("type") == "object":
+                prop_schema.type_ = protos.Type.OBJECT
+            else:
+                prop_schema.type_ = protos.Type.STRING  # Default fallback
+            
+            # Add description
+            if "description" in prop:
+                prop_schema.description = prop["description"]
+            
+            # Add enum values if present
+            if "enum" in prop:
+                for enum_val in prop["enum"]:
+                    prop_schema.enum.append(str(enum_val))
+            
+            # Handle anyOf (union types like StrEnum)
+            if "anyOf" in prop:
+                for any_option in prop["anyOf"]:
+                    if "enum" in any_option:
+                        for enum_val in any_option["enum"]:
+                            prop_schema.enum.append(str(enum_val))
+            
+            properties[name] = prop_schema
+    
+    # Create the main schema
+    main_schema = protos.Schema(
+        type_=protos.Type.OBJECT,
+        properties=properties,
+        required=schema.get("required", [])
+    )
+    
+    return protos.FunctionDeclaration(
+        name=model_class.__name__,
+        description=schema.get("description", model_class.__doc__ or ""),
+        parameters=main_schema
+    )
 
 
 class BaseRegistry:
@@ -212,7 +265,7 @@ class BaseRegistry:
     def _retry_chat(
         self,
         messages: Sequence[dict],
-        tools: list[dict],
+        tools: list[protos.FunctionDeclaration],
         parse_fn: Callable,
         is_mini: bool,
         max_retries: int = 5,
@@ -227,7 +280,7 @@ class BaseRegistry:
         gemini_messages = self._convert_messages_to_gemini(messages)
         
         # Configure tools
-        tools_config = [genai.protos.Tool(function_declarations=tools)] if tools else None
+        tools_config = [protos.Tool(function_declarations=tools)] if tools else None
 
         for retry in range(max_retries):
             temperature = retry_temperature if retry > 0 else 0
@@ -255,7 +308,7 @@ class BaseRegistry:
 
         raise ExceptionGroup(f"Failed after {max_retries} retries", exceptions)
 
-    def _convert_messages_to_gemini(self, messages: Sequence[dict]) -> list:
+    def _convert_messages_to_gemini(self, messages: Sequence[dict]) -> list[protos.Content]:
         """Convert OpenAI-style messages to Gemini format"""
         gemini_messages = []
         
@@ -265,18 +318,40 @@ class BaseRegistry:
             
             if role == "system":
                 # System messages become user messages with system instruction
-                gemini_messages.append({"role": "user", "parts": [{"text": f"System: {content}"}]})
+                gemini_messages.append(
+                    protos.Content(
+                        role="user", 
+                        parts=[protos.Part(text=f"System: {content}")]
+                    )
+                )
             elif role == "user":
-                gemini_messages.append({"role": "user", "parts": [{"text": content}]})
+                gemini_messages.append(
+                    protos.Content(
+                        role="user", 
+                        parts=[protos.Part(text=content)]
+                    )
+                )
             elif role == "assistant":
-                gemini_messages.append({"role": "model", "parts": [{"text": content}]})
+                gemini_messages.append(
+                    protos.Content(
+                        role="model", 
+                        parts=[protos.Part(text=content)]
+                    )
+                )
             elif role == "tool":
                 # Tool responses become function responses in Gemini
                 tool_call_id = msg.get("tool_call_id", "")
-                gemini_messages.append({
-                    "role": "function",
-                    "parts": [{"function_response": {"name": tool_call_id, "response": {"result": content}}}]
-                })
+                gemini_messages.append(
+                    protos.Content(
+                        role="function",
+                        parts=[protos.Part(
+                            function_response=protos.FunctionResponse(
+                                name=tool_call_id,
+                                response={"result": content}
+                            )
+                        )]
+                    )
+                )
         
         return gemini_messages
 
@@ -331,7 +406,7 @@ class FunctionRegistry(BaseRegistry):
 
     def get_tools(
         self, is_mini: bool, subset: str | list[str] | None = None
-    ) -> list[dict]:
+    ) -> list[protos.FunctionDeclaration]:
         """Get Gemini tools.
         `subset` optionally specifies a single function or a subset of functions.
         """
@@ -438,7 +513,7 @@ class ParserRegistry(BaseRegistry):
 
     def get_tools(
         self, is_mini: bool, subset: str | list[str] | None = None
-    ) -> list[dict]:
+    ) -> list[protos.FunctionDeclaration]:
         """Get Gemini tools.
         `subset` optionally specifies a single function or a subset of functions.
         """

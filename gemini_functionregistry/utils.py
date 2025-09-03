@@ -73,6 +73,10 @@ except ValidationError:
     # Expected
     ...
 
-pprint(pydantic_to_gemini_function(SomeFunctionModel))
-print("\n")
-print("Comparison - OpenAI would require wrapping in {'type': 'function', 'function': {...}}")
+print("Gemini Function Declaration:")
+gemini_func = pydantic_to_gemini_function(SomeFunctionModel)
+print(f"Name: {gemini_func.name}")
+print(f"Description: {gemini_func.description}")
+print(f"Parameters type: {gemini_func.parameters.type_}")
+print(f"Required: {list(gemini_func.parameters.required)}")
+print("\nComparison - OpenAI would require wrapping in {'type': 'function', 'function': {...}}")
