@@ -4,3 +4,8 @@
 /documentintelligence/__pycache__/
 .gitignore
 *.pyc
+
+# Test and debug files  
+debug_schema.py
+explore_gemini_format.py
+test_gemini_protos.py
